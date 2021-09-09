@@ -45,4 +45,5 @@ RUN apk --update upgrade --no-cache && \
 RUN echo 'alias ll="ls -l"' > ~/.bashrc
 
 COPY /src/crayipxe /app/crayipxe
+USER 65534:65534
 CMD ["/usr/bin/python3", "-m", "crayipxe.service"]

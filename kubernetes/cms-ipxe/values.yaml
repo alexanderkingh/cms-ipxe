@@ -17,6 +17,19 @@ cray-service:
     node-discovery.cray.com/networks.node_management: "true"
   replicaCount: 1
   # strategyType: Recreate ????????????????????
+  initContainers:
+    update-volume:
+      image:
+        repository: docker.io/alpine:3.13
+        pullPolicy: Always
+      volumeMounts:
+      - name: cray-tftp-data
+        mountPath: /shared_tftp
+        subPath: tftp
+      command:
+        - chmod
+        - '65534:65534'
+        - "/shared_tftp/*"
   containers:
     cray-ipxe:
       name: cray-ipxe
