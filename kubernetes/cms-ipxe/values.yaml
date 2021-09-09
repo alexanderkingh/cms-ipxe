@@ -19,6 +19,7 @@ cray-service:
   # strategyType: Recreate ????????????????????
   initContainers:
     update-volume:
+      name: update-volume
       image:
         repository: docker.io/alpine:3.13
         pullPolicy: Always
