@@ -20,9 +20,7 @@ cray-service:
   initContainers:
     update-volume:
       name: update-volume
-      image:
-        repository: docker.io/alpine:3.13
-        pullPolicy: Always
+      image: dtr.dev.cray.com/docker.io/alpine:3.13
       volumeMounts:
       - name: cray-tftp-data
         mountPath: /shared_tftp
