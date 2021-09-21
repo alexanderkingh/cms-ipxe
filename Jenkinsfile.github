@@ -1,0 +1,87 @@
+@Library('cms-meta-tools') _
+@Library('csm-shared-library') __
+
+pipeline {
+    agent {
+        label "metal-gcp-builder"
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: "10"))
+        timestamps()
+    }
+
+    environment {
+        DOCKER_NAME = "cray-bss-ipxe"
+        CHART_NAME = "cms-ipxe"
+        DESCRIPTION = "Cray Management System iPXE binaries"
+        IS_STABLE = getBuildIsStable()
+    }
+
+    stages {
+        stage("Clone cms_meta_tools repo") {
+            steps {
+                // This function is defined in cms-meta-tools:vars/cloneCMSMetaTools.groovy
+                cloneCMSMetaTools()
+            }
+        }
+
+        stage("Set Versions") {
+            steps {
+                // This function is defined in cms-meta-tools:vars/setVersionFiles.groovy
+                setVersionFiles()
+            }
+        }
+
+        stage("runBuildPrep") {
+            steps {
+                sh "make runbuildprep"
+            }
+        }
+
+        stage("Lint") {
+            steps {
+                sh "make lint"
+            }
+        }
+
+        stage("Build") {
+            parallel {
+                stage('Image') {
+                    environment {
+                        DOCKER_VERSION = sh(returnStdout: true, script: "head -1 .docker_version").trim()
+                        DOCKER_ARGS = getDockerBuildArgs(name: env.NAME, description: env.DESCRIPTION, version: env.DOCKER_VERSION)
+                    }
+
+                    steps {
+                        echo "Docker args are ${env.DOCKER_ARGS}"
+                        sh "make image"
+                    }
+                }
+
+                stage('Chart') {
+                    environment {
+                        DOCKER_VERSION = sh(returnStdout: true, script: "head -1 .docker_version").trim()
+                    }
+                    
+                    steps {
+                        updateCsmHelmChartAppVersion(chartPath: "${WORKSPACE}/kubernetes/${CHART_NAME}", appVersion:  env.DOCKER_VERSION)
+                        sh "make chart"
+                    }
+                }
+            }
+        }
+
+        stage('Publish ') {
+            environment {
+                DOCKER_VERSION = sh(returnStdout: true, script: "head -1 .docker_version").trim()
+            }
+            
+            steps {
+                publishCsmDockerImage(image: env.DOCKER_NAME, tag: env.DOCKER_VERSION, isStable: env.IS_STABLE)
+                publishCsmHelmCharts(component: env.CHART_NAME, chartsPath: "${WORKSPACE}/kubernetes/.packaged", isStable: env.IS_STABLE)
+            }
+        }
+    }
+}
+
