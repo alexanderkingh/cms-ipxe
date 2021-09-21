@@ -55,3 +55,4 @@ chart_package:
 chart_test:
 		helm lint "${CHART_PATH}/${CHART_NAME}"
 		docker run --rm -v ${PWD}/${CHART_PATH}:/apps ${HELM_UNITTEST_IMAGE} -3 ${CHART_NAME}
+
