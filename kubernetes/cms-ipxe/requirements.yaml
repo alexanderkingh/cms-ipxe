@@ -1,4 +1,4 @@
 dependencies:
 - name: cray-service
   version: "^2.0.0"
-  repository: "@cray-internal"
+  repository: "https://artifactory.algol60.net/artifactory/csm-helm-charts/"
