@@ -70,6 +70,16 @@ For a local build, you will also need to manually write the .version, .docker_ve
 builds a docker image), and .chart_version (if this repo builds a helm chart) files. When building
 on github, this is done by the setVersionFiles() function.
 
+## Dependency: cray-tpsw-ipxe
+cms-ipxe uses the cray-tpsw-ipxe Docker image built by the ipxe-tpsw-clone reepository.
+We specify the major and minor version of the image we want with the
+[update_external_versions.conf](update_external_versions.conf) file.
+At build time the [runBuildPrep.sh](runBuildPrep.sh) script calls a utility
+which finds the latest version with that major and minor number.
+
+When creating a new release branch, be sure to update this file to specify the
+desired major and minor number of the image for the new release.
+
 ## Versioning
 The version of this repo is generated dynamically at build time by running the version.py script in 
 cms-meta-tools. The version is included near the very beginning of the github build output. 
