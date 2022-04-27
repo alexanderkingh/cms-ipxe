@@ -37,7 +37,6 @@ share location.
 
 import fileinput
 import logging
-import jwt
 import os
 import re
 import shutil
@@ -46,17 +45,18 @@ import subprocess
 import sys
 import tempfile
 import time
-from kubernetes import client, config
 from urllib.parse import urlparse
+
+import jwt
 import oauthlib.oauth2
 import requests_oauthlib
-from yaml import load
-
 from crayipxe.liveness.ipxe_timestamp import ipxeTimestamp, IPXE_PATH, DEBUG_IPXE_PATH
+from kubernetes import client, config
+from yaml import load
 
 IPXE_BUILD_DIR = '/ipxe'
 TFTP_MOUNT_DIR = '/shared_tftp'
-TOKEN_HOST="api-gw-service-nmn.local"  # default in case it is not in the settings configmap
+TOKEN_HOST = "api-gw-service-nmn.local"  # default in case it is not in the settings configmap
 LOGGER = logging.getLogger(__name__)
 
 # These iPxe debug settings are enabled in normal builds because they provide
@@ -70,8 +70,12 @@ cray_ipxe_debug_level_default = "httpcore:2,x509:2,efi_time"
 
 # The minimum amount of time in seconds prior to the expiration time for which
 # a JWT token is still considered valid for use by this service.
-token_min_remaining_valid_time_default = 30*60
+token_min_remaining_valid_time_default = 30 * 60
 cray_ipxe_token_min_remaining_valid_time = token_min_remaining_valid_time_default
+
+DEFAULT_IPXE_BINARY_NAME = 'ipxe.efi'
+DEFAULT_IPXE_DEBUG_BINARY_NAME = 'debug-ipxe.efi'
+
 
 class GracefulExit(object):
     """
@@ -101,7 +105,7 @@ def cleanup(*args, **kwargs):
 
 
 def create_binaries(api_instance, fname, script, cert=None, arch='x86_64', kind='efi',
-    bearer_token=None, ipxe_build_debug=False, ipxe_build_debug_level=None):
+                    bearer_token=None, ipxe_build_debug=False, ipxe_build_debug_level=None):
     """
     Creates a new ipxe binary and registers it to the TFTP service for
     consumption.
@@ -112,7 +116,7 @@ def create_binaries(api_instance, fname, script, cert=None, arch='x86_64', kind=
     build_command = ['make']
 
     # Defined build behavior translation
-    build_strings = {('x86_64', 'efi'):  'bin-x86_64-efi/ipxe.efi',
+    build_strings = {('x86_64', 'efi'): 'bin-x86_64-efi/ipxe.efi',
                      ('x86_64', 'kpxe'): 'bin/undionly.kpxe'}
 
     # Add architecture specific flags
@@ -139,7 +143,7 @@ def create_binaries(api_instance, fname, script, cert=None, arch='x86_64', kind=
         LOGGER.info("Attempting to obtain S3_HOST from cm/sts-rados-config int_endpoint_url")
         sts_rados_raw = api_instance.read_namespaced_config_map('sts-rados-config', 'services')
         sts_rados_conf = load(sts_rados_raw.data['rados_conf'])
-        sts_rados_internal_endpoint=sts_rados_conf.get('int_endpoint_url')
+        sts_rados_internal_endpoint = sts_rados_conf.get('int_endpoint_url')
         parsed_uri = urlparse(sts_rados_internal_endpoint)
         rgw_s3_host = parsed_uri.hostname
         if rgw_s3_host:
@@ -200,6 +204,7 @@ def create_binaries(api_instance, fname, script, cert=None, arch='x86_64', kind=
         os.unlink(tfile_original.name)
 
     LOGGER.info("Newly created ipxe binary created: '%s'" % (os.path.join(TFTP_MOUNT_DIR, fname)))
+    return os.path.join(TFTP_MOUNT_DIR, fname)
 
 
 def fetch_token(token_host):
@@ -312,7 +317,7 @@ def main():
         config.load_incluster_config()
     except Exception:
         sys.exit("This application must be run within the k8s cluster.")
-        raise
+
     api_instance = client.CoreV1Api()
 
     # Initialize watched variables to none
@@ -321,6 +326,8 @@ def main():
     shell_script = None
     ca_public_key = None
     bearer_token = None
+    ipxe_binary = None
+    ipxe_debug_binary = None
 
     # Create a graceful exit semaphore
     run_context = GracefulExit(cleanup)
@@ -424,16 +431,24 @@ def main():
 
         if any([settings_changed, ca_public_key_changed, bss_script_changed,
                 bearer_token_changed]):
-
             # Create a file to indicate the build is in progress. A Kuberenetes
             # livenessProbe can check on this file to see if it has stayed around
             # longer than expected, which would indicate a build failure.
             ipxe_timestamp = ipxeTimestamp(IPXE_PATH, os.getenv('IPXE_BUILD_TIME_LIMIT', 40))
+            ipxe_binary_name = settings.get('ipxe_binary_name', DEFAULT_IPXE_BINARY_NAME)
 
-            create_binaries(api_instance, 'ipxe.efi', bss_script, cert=public_cert,
-                            bearer_token=bearer_token,
-                            ipxe_build_debug=ipxe_build_debug,
-                            ipxe_build_debug_level=cray_ipxe_debug_level)
+            new_ipxe_binary = create_binaries(api_instance, ipxe_binary_name, bss_script, cert=public_cert,
+                                              bearer_token=bearer_token,
+                                              ipxe_build_debug=ipxe_build_debug,
+                                              ipxe_build_debug_level=cray_ipxe_debug_level)
+
+            if ipxe_binary and os.path.exists(ipxe_binary) and not ipxe_binary == new_ipxe_binary:
+                try:
+                    # The ipxe binary name has changed. Remove the old binary.
+                    os.remove(ipxe_binary)
+                except IOError:
+                    LOGGER.warning(f'Could not remove previous ipxe  binary {ipxe_binary}')
+                    ipxe_binary = new_ipxe_binary
 
             ipxe_timestamp.delete()
 
@@ -446,17 +461,27 @@ def main():
             shell_script = shell_script_new
         if any([settings_changed, ca_public_key_changed, shell_script_changed,
                 bearer_token_changed]):
-
             # Create a file to indicate the build is in progress. A Kuberenetes
             # livenessProbe can check on this file to see if it has stayed around
             # longer than expected, which would indicate a build failure.
             debug_ipxe_timestamp = ipxeTimestamp(DEBUG_IPXE_PATH,
                                                  os.getenv('DEBUG_IPXE_BUILD_TIME_LIMIT', 40))
+            ipxe_debug_binary_name = settings.get('cray_ipxe_debug_binary_name', DEFAULT_IPXE_DEBUG_BINARY_NAME)
 
-            create_binaries(api_instance, 'debug.efi', shell_script, cert=public_cert,
-                            bearer_token=bearer_token,
-                            ipxe_build_debug=ipxe_build_debug,
-                            ipxe_build_debug_level=cray_ipxe_debug_level)
+            new_ipxe_debug_binary = create_binaries(api_instance, ipxe_debug_binary_name, shell_script,
+                                                    cert=public_cert,
+                                                    bearer_token=bearer_token,
+                                                    ipxe_build_debug=ipxe_build_debug,
+                                                    ipxe_build_debug_level=cray_ipxe_debug_level)
+
+            if ipxe_debug_binary and os.path.exists(ipxe_debug_binary) and \
+                    not ipxe_debug_binary == new_ipxe_debug_binary:
+                try:
+                    # The ipxe debug binary name has changed. Remove the old binary.
+                    os.remove(ipxe_debug_binary)
+                except IOError:
+                    LOGGER.warning(f'Could not remove previous ipxe debug binary {ipxe_debug_binary}')
+                ipxe_debug_binary = new_ipxe_debug_binary
 
             debug_ipxe_timestamp.delete()
 
